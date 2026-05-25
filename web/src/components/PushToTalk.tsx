@@ -131,15 +131,15 @@ export function PushToTalk() {
   }
 
   return (
-    <>
+    <div className="flex h-[100dvh] flex-col overflow-hidden bg-void-950">
       {/* Ambient background */}
-      <div className="pointer-events-none fixed inset-0">
+      <div className="pointer-events-none absolute inset-0">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(234,179,8,0.08),transparent)]" />
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_60%_40%_at_80%_60%,rgba(120,50,20,0.05),transparent)]" />
       </div>
 
       {/* Header */}
-      <header className="relative z-10 flex items-center justify-between border-b border-void-800/50 px-5 py-3 backdrop-blur-sm">
+      <header className="relative z-10 flex shrink-0 items-center justify-between border-b border-void-800/50 px-5 py-3 backdrop-blur-sm">
         <div className="flex items-center gap-3">
           <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-dungeon-500/20 text-base">
             ⚔️
@@ -246,8 +246,8 @@ export function PushToTalk() {
         </div>
       </div>
 
-      {/* Bottom button - fixed */}
-      <div className="relative z-10 flex flex-col items-center gap-3 border-t border-void-800/50 bg-void-950/90 px-5 py-4 backdrop-blur-sm">
+      {/* Bottom button */}
+      <div className="relative z-10 flex shrink-0 flex-col items-center gap-3 border-t border-void-800/50 bg-void-950/90 px-5 py-4 backdrop-blur-sm">
         <div className="relative">
           {isRecording && (
             <>
@@ -302,6 +302,6 @@ export function PushToTalk() {
               : "hold to speak"}
         </p>
       </div>
-    </>
+    </div>
   );
 }

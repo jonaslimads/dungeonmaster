@@ -28,17 +28,11 @@
   --font-display: "Inter", system-ui, -apple-system, sans-serif;
 }
 
-html, body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  overflow: hidden;
-}
-
 body {
   background: var(--color-void-950);
   color: var(--color-void-100);
   font-family: var(--font-display);
+  margin: 0;
 }
 
 @keyframes pulse-ring {
