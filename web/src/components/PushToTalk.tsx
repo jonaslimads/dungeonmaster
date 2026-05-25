@@ -162,9 +162,9 @@ export function PushToTalk() {
         className="relative z-10 flex-1 overflow-y-auto px-5 py-4"
         style={{ minHeight: 0 }}
       >
-        <div className="mx-auto max-w-2xl space-y-2">
+        <div className="mx-auto flex h-full min-h-0 max-w-2xl flex-col space-y-2">
           {messages.length === 0 && (
-            <div className="flex h-full items-center justify-center">
+            <div className="flex flex-1 items-center justify-center">
               <div className="rounded-xl border border-dashed border-void-800/50 p-10 text-center">
                 <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-void-800/50 text-lg opacity-50">
                   📜
