@@ -1,0 +1,43 @@
+services:
+  proxy:
+    image: haproxy:2.9
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./build/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./build/ssl:/etc/haproxy/ssl:ro
+    depends_on:
+      - web
+      - voice
+
+  web:
+    build:
+      context: ./web
+    expose:
+      - "3000"
+    environment:
+      - NEXT_PUBLIC_VOICE_BASE_URL=https://dungeonmaster.lan
+      - NEXT_PUBLIC_API_TOKEN=${NEXT_PUBLIC_API_TOKEN}
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ./web:/app
+      - web-node-modules:/app/node_modules
+      - /app/.next
+
+  voice:
+    build:
+      context: ./voice
+    expose:
+      - "8000"
+    env_file:
+      - .env
+    volumes:
+      - ./voice/src:/app/src
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  web-node-modules:

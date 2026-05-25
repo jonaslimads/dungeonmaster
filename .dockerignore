@@ -1,0 +1,15 @@
+# General
+.env.local
+.git/
+.gitignore
+*.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+data/
+
+# Node
+node_modules/
+.next/

@@ -1,0 +1,32 @@
+# Environment
+.env.local
+
+# SSL certs (regenerate with build/ssl/generate.sh)
+build/ssl/cert.pem
+build/ssl/key.pem
+build/ssl/combined.pem
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/
+.next/
+out/
+next-env.d.ts
+
+# Data
+data/audio/input/*
+data/audio/output/*
+!data/audio/input/.gitkeep
+!data/audio/output/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
