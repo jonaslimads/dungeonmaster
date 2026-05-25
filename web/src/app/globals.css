@@ -26,12 +26,13 @@
   --color-void-950: #0c0c0e;
 
   --font-display: "Inter", system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
 
 html, body {
-  overflow: hidden;
+  margin: 0;
+  padding: 0;
   height: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -41,51 +42,7 @@ body {
 }
 
 @keyframes pulse-ring {
-  0% {
-    transform: scale(0.95);
-    opacity: 0.5;
-  }
-  50% {
-    transform: scale(1.05);
-    opacity: 0.2;
-  }
-  100% {
-    transform: scale(0.95);
-    opacity: 0.5;
-  }
-}
-
-@keyframes float {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-6px);
-  }
-}
-
-@keyframes shimmer {
-  0% {
-    background-position: -200% center;
-  }
-  100% {
-    background-position: 200% center;
-  }
-}
-
-.animate-pulse-ring {
-  animation: pulse-ring 2s ease-in-out infinite;
-}
-
-.animate-float {
-  animation: float 3s ease-in-out infinite;
-}
-
-.animate-shimmer {
-  background-size: 200% auto;
-  animation: shimmer 3s linear infinite;
-}
-
-.pb-safe {
-  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  0% { transform: scale(0.95); opacity: 0.5; }
+  50% { transform: scale(1.05); opacity: 0.2; }
+  100% { transform: scale(0.95); opacity: 0.5; }
 }

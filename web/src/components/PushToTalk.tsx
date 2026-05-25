@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 import { sendAudio, type SSEEvent } from "@/lib/api";
 
 type Message =
@@ -24,6 +24,13 @@ export function PushToTalk() {
   const appendMessage = useCallback((msg: Message) => {
     setMessages((prev) => [...prev, msg]);
   }, []);
+
+  // Scroll to bottom on new message
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
 
   const handleEvent = useCallback(
     (evt: SSEEvent) => {
@@ -124,7 +131,7 @@ export function PushToTalk() {
   }
 
   return (
-    <div className="flex h-dvh min-h-dvh flex-col overflow-hidden bg-void-950">
+    <>
       {/* Ambient background */}
       <div className="pointer-events-none fixed inset-0">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(234,179,8,0.08),transparent)]" />
@@ -149,20 +156,23 @@ export function PushToTalk() {
         </div>
       </header>
 
-      {/* Messages */}
+      {/* Messages - scrollable area */}
       <div
         ref={scrollRef}
-        className="relative z-10 flex-1 overflow-y-auto px-5 py-4 scrollbar-thin"
+        className="relative z-10 flex-1 overflow-y-auto px-5 py-4"
+        style={{ minHeight: 0 }}
       >
         <div className="mx-auto max-w-2xl space-y-2">
           {messages.length === 0 && (
-            <div className="mt-20 rounded-xl border border-dashed border-void-800/50 p-10 text-center">
-              <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-void-800/50 text-lg opacity-50">
-                📜
+            <div className="flex h-full items-center justify-center">
+              <div className="rounded-xl border border-dashed border-void-800/50 p-10 text-center">
+                <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-void-800/50 text-lg opacity-50">
+                  📜
+                </div>
+                <p className="text-sm text-void-600">
+                  Your adventure begins here...
+                </p>
               </div>
-              <p className="text-sm text-void-600">
-                Your adventure begins here...
-              </p>
             </div>
           )}
 
@@ -196,7 +206,7 @@ export function PushToTalk() {
             if (msg.type === "user") {
               return (
                 <div key={msg.id} className="flex justify-end">
-                  <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-void-800 px-4 py-2.5">
+                  <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-void-800 px-4 py-2.5">
                     <p className="text-sm leading-relaxed text-void-200">
                       {msg.text}
                     </p>
@@ -207,7 +217,7 @@ export function PushToTalk() {
 
             return (
               <div key={msg.id} className="flex justify-start">
-                <div className="max-w-[80%] rounded-2xl rounded-bl-sm border border-dungeon-500/10 bg-dungeon-950/30 px-4 py-2.5">
+                <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-dungeon-500/10 bg-dungeon-950/30 px-4 py-2.5">
                   <div className="mb-1 flex items-center gap-1.5">
                     <span className="text-xs">🐉</span>
                     <span className="text-[9px] font-semibold uppercase tracking-widest text-dungeon-500/50">
@@ -236,23 +246,23 @@ export function PushToTalk() {
         </div>
       </div>
 
-      {/* Bottom button */}
-      <div className="relative z-10 flex flex-col items-center gap-3 border-t border-void-800/50 bg-void-950/80 px-5 py-4 pb-safe backdrop-blur-sm">
+      {/* Bottom button - fixed */}
+      <div className="relative z-10 flex flex-col items-center gap-3 border-t border-void-800/50 bg-void-950/90 px-5 py-4 backdrop-blur-sm">
         <div className="relative">
           {isRecording && (
             <>
-              <div className="absolute inset-0 rounded-full border-2 border-red-500/30 animate-pulse-ring" style={{ margin: "-12px" }} />
-              <div className="absolute inset-0 rounded-full border border-red-500/20 animate-pulse-ring" style={{ margin: "-24px", animationDelay: "0.5s" }} />
+              <div className="absolute inset-0 rounded-full border-2 border-red-500/30" style={{ margin: "-12px", animation: "pulse-ring 2s ease-in-out infinite" }} />
+              <div className="absolute inset-0 rounded-full border border-red-500/20" style={{ margin: "-24px", animation: "pulse-ring 2s ease-in-out 0.5s infinite" }} />
             </>
           )}
 
           <button
-            className={`group relative flex h-20 w-20 items-center justify-center rounded-full border transition-all duration-300 ${
+            className={`group relative flex h-16 w-16 items-center justify-center rounded-full border transition-all duration-300 ${
               isRecording
-                ? "border-red-500/50 bg-red-500/10 shadow-[0_0_40px_-10px_rgba(239,68,68,0.4)]"
+                ? "border-red-500/50 bg-red-500/10"
                 : isLoading
                   ? "border-void-700 bg-void-800/80"
-                  : "border-void-700 bg-void-900/80 shadow-lg hover:border-dungeon-500/40 hover:bg-void-800/90 hover:shadow-[0_0_40px_-10px_rgba(234,179,8,0.15)]"
+                  : "border-void-700 bg-void-900/80 hover:border-dungeon-500/40 hover:bg-void-800/90"
             }`}
             onPointerDown={startRecording}
             onPointerUp={stopRecording}
@@ -266,25 +276,17 @@ export function PushToTalk() {
                 <span className="h-1 w-1 animate-bounce rounded-full bg-red-400" style={{ animationDelay: "300ms" }} />
               </div>
             ) : isLoading ? (
-              <div className="h-5 w-5 animate-spin rounded-full border-[2px] border-void-600 border-t-dungeon-400" />
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-void-600 border-t-dungeon-400" />
             ) : (
               <svg
-                className="h-7 w-7 text-void-500 transition-colors group-hover:text-dungeon-400"
+                className="h-6 w-6 text-void-500 transition-colors group-hover:text-dungeon-400"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
                 strokeWidth={1.5}
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"
-                />
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M19 10v2a7 7 0 0 1-14 0v-2"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 0 1-14 0v-2" />
                 <line x1="12" y1="19" x2="12" y2="23" strokeLinecap="round" />
                 <line x1="8" y1="23" x2="16" y2="23" strokeLinecap="round" />
               </svg>
@@ -300,6 +302,6 @@ export function PushToTalk() {
               : "hold to speak"}
         </p>
       </div>
-    </div>
+    </>
   );
 }
