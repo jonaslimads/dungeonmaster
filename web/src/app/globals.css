@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+@theme {
+  --color-dungeon-50: #fefce8;
+  --color-dungeon-100: #fef9c3;
+  --color-dungeon-200: #fef08a;
+  --color-dungeon-300: #fde047;
+  --color-dungeon-400: #facc15;
+  --color-dungeon-500: #eab308;
+  --color-dungeon-600: #ca8a08;
+  --color-dungeon-700: #a16207;
+  --color-dungeon-800: #854d0e;
+  --color-dungeon-900: #713f12;
+  --color-dungeon-950: #422006;
+
+  --color-void-50: #fafafa;
+  --color-void-100: #f4f4f5;
+  --color-void-200: #e4e4e7;
+  --color-void-300: #d4d4d8;
+  --color-void-400: #a1a1aa;
+  --color-void-500: #71717a;
+  --color-void-600: #52525b;
+  --color-void-700: #3f3f46;
+  --color-void-800: #27272a;
+  --color-void-900: #18181b;
+  --color-void-950: #0c0c0e;
+
+  --font-display: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+body {
+  background: var(--color-void-950);
+  color: var(--color-void-100);
+  font-family: var(--font-display);
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.2;
+  }
+  100% {
+    transform: scale(0.95);
+    opacity: 0.5;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-shimmer {
+  background-size: 200% auto;
+  animation: shimmer 3s linear infinite;
+}
