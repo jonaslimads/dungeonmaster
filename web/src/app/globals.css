@@ -29,6 +29,11 @@
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
 
+html, body {
+  overflow: hidden;
+  height: 100%;
+}
+
 body {
   background: var(--color-void-950);
   color: var(--color-void-100);
@@ -79,4 +84,8 @@ body {
 .animate-shimmer {
   background-size: 200% auto;
   animation: shimmer 3s linear infinite;
+}
+
+.pb-safe {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
 }
