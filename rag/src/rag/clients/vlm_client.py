@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 from pathlib import Path
@@ -69,6 +70,76 @@ class VlmPageAnalysisDTO:
         self.visual_assets = visual_assets
 
 
+_VLM_SYSTEM_PROMPT = (
+    "You are a PDF layout analysis and OCR assistant for RPG rulebooks. "
+    "Analyze the page image and return structured JSON.\n\n"
+    "## Markdown Reconstruction (PRIMARY TASK)\n\n"
+    "Reconstruct the full page as clean, well-structured Markdown.\n\n"
+    "Rules for Markdown output:\n"
+    "- Use proper heading levels: # for major sections, ## for subsections, ### for sub-subsections.\n"
+    "- Preserve the hierarchy of headings from the page.\n"
+    "- Convert tables to proper Markdown table format with | separators and header rows.\n"
+    "- Preserve stat blocks as structured text with clear labels.\n"
+    "- Use **bold** for emphasized terms, *italics* for flavor text.\n"
+    "- Use numbered lists for ordered content, bullet lists for unordered.\n"
+    "- Keep paragraphs coherent — do NOT break words across lines.\n"
+    "- Do NOT add line breaks in the middle of words or phrases.\n"
+    "- Preserve special characters, numbers, and symbols accurately.\n"
+    "- For spell entries: include name, level, school, casting time, range, components, duration, description.\n"
+    "- For monster entries: include name, size/type, armor class, hit points, speed, ability scores, skills, senses, CR, traits, actions.\n"
+    "- For class features: include name, level, description.\n"
+    "- For rules: preserve the exact wording and structure.\n"
+    "- Page numbers at the bottom of pages should be omitted from the markdown.\n"
+    "- Chapter titles and section headers become Markdown headings.\n"
+    "- DO NOT invent content. Only transcribe what is visible.\n\n"
+    "## Layout Blocks\n\n"
+    "For each text block on the page:\n"
+    "- Return the block type: heading, subheading, body_text, caption, table, list, footnote, page_number, stat_block, spell_block, monster_block.\n"
+    "- Extract the text as accurately as possible.\n"
+    "- Provide a bounding box in [x1, y1, x2, y2] pixel coordinates.\n"
+    "- Assign a reading_order integer.\n"
+    "- Estimate confidence (0.0 to 1.0).\n\n"
+    "## Visual Assets\n\n"
+    "Detect all meaningful visual image regions on the page.\n\n"
+    "For each visual region:\n"
+    "- Return a bounding box in [x1, y1, x2, y2] pixel coordinates.\n"
+    "- Classify the asset type: map, illustration, character_art, monster_art, item_art, "
+    "symbol, diagram, table_image, stat_block_image, decorative_art, cover_art, unknown.\n"
+    "- Describe what the image appears to show.\n"
+    "- Say whether it is useful for gameplay.\n"
+    "- Ignore purely decorative borders unless they contain useful information.\n"
+    "- Prefer one bounding box per coherent visual asset.\n"
+    "- If the image is a map, mention visible labels, room numbers, paths, or regions.\n"
+    "- If the image is a monster, character, item, symbol, or diagram, describe it briefly.\n"
+    "- Do not invent names unless the page text clearly supports them.\n\n"
+    "## Output Format\n\n"
+    "Return ONLY valid JSON with this structure:\n"
+    '{\n'
+    '  "markdown": "...",\n'
+    '  "layout_blocks": [\n'
+    '    {\n'
+    '      "block_type": "...",\n'
+    '      "text": "...",\n'
+    '      "bbox": [x1, y1, x2, y2],\n'
+    '      "reading_order": 0,\n'
+    '      "confidence": 0.0\n'
+    '    }\n'
+    '  ],\n'
+    '  "visual_assets": [\n'
+    '    {\n'
+    '      "asset_type": "...",\n'
+    '      "title": "..." or null,\n'
+    '      "description": "...",\n'
+    '      "bbox": [x1, y1, x2, y2],\n'
+    '      "linked_text": "..." or null,\n'
+    '      "useful_for_gameplay": true or false,\n'
+    '      "confidence": 0.0\n'
+    '    }\n'
+    '  ]\n'
+    '}'
+)
+
+
 class VlmClient:
     def __init__(self, *, timeout_seconds: int = 300) -> None:
         self._base_url = settings.vlm_url.rstrip("/")
@@ -100,48 +171,29 @@ class VlmClient:
         page_number: int,
     ) -> VlmPageAnalysisDTO:
         """Send a page image to Gemma 4 for layout analysis, OCR, and visual asset detection."""
-        system_prompt = (
-            "You are a PDF layout analysis assistant. Analyze the page image and return structured JSON.\n\n"
-            "For each text block on the page:\n"
-            "- Return the block type (heading, body_text, caption, table, list, footnote, page_number).\n"
-            "- Extract the text as accurately as possible.\n"
-            "- Provide a bounding box in [x1, y1, x2, y2] pixel coordinates.\n"
-            "- Assign a reading_order integer.\n"
-            "- Estimate confidence (0.0 to 1.0).\n\n"
-            "Also detect all meaningful visual image regions on the page.\n\n"
-            "For each visual region:\n"
-            "- Return a bounding box in [x1, y1, x2, y2] pixel coordinates.\n"
-            "- Classify the asset type: map, illustration, character_art, monster_art, item_art, "
-            "symbol, diagram, table_image, stat_block_image, decorative_art, cover_art, unknown.\n"
-            "- Describe what the image appears to show.\n"
-            "- Say whether it is useful for gameplay.\n"
-            "- Ignore purely decorative borders unless they contain useful information.\n"
-            "- Prefer one bounding box per coherent visual asset.\n"
-            "- If the image is a map, mention visible labels, room numbers, paths, or regions.\n"
-            "- If the image is a monster, character, item, symbol, or diagram, describe it briefly.\n"
-            "- Do not invent names unless the page text clearly supports them.\n\n"
-            "Also reconstruct the full page as clean Markdown.\n\n"
-            "Return ONLY valid JSON with this structure:\n"
-            '{\n'
-            '  "markdown": "...",\n'
-            '  "layout_blocks": [...],\n'
-            '  "visual_assets": [...]\n'
-            '}'
-        )
-
         with open(page_image_path, "rb") as f:
             image_bytes = f.read()
+        image_b64 = base64.b64encode(image_bytes).decode("ascii")
 
-        files = [
-            ("file", ("page.png", image_bytes, "image/png")),
-        ]
-        data = {
+        payload = {
             "model": self._model,
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Analyze page {page_number}."},
+                {"role": "system", "content": _VLM_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                        },
+                        {
+                            "type": "text",
+                            "text": f"Analyze page {page_number}. Reconstruct the full markdown and detect all layout blocks and visual assets.",
+                        },
+                    ],
+                },
             ],
-            "max_tokens": 8192,
+            "max_tokens": 16384,
             "temperature": 0.1,
         }
 
@@ -152,15 +204,14 @@ class VlmClient:
             page_number,
         )
 
-        headers: dict[str, str] = {}
+        headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._password:
             headers["Authorization"] = f"Bearer {self._password}"
 
         try:
             response = await self._http.post(
                 f"{self._base_url}/chat/completions",
-                data=data,
-                files=files,
+                json=payload,
                 headers=headers,
             )
         except httpx.TimeoutException as exc:
@@ -192,10 +243,11 @@ class VlmClient:
 
         parsed = self._parse_vlm_response(content, page_number)
         logger.info(
-            "analyze_page_layout OK: page=%d blocks=%d assets=%d",
+            "analyze_page_layout OK: page=%d blocks=%d assets=%d markdown_len=%d",
             page_number,
             len(parsed.layout_blocks),
             len(parsed.visual_assets),
+            len(parsed.markdown),
         )
         return parsed
 

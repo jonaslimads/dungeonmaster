@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 from pathlib import Path
@@ -25,6 +26,26 @@ class OcrBlockDTO:
         self.bbox = bbox
         self.confidence = confidence
         self.page_number = page_number
+
+
+_OCR_SYSTEM_PROMPT = (
+    "You are an OCR assistant. Extract all text from the page image.\n\n"
+    "Return ONLY valid JSON with this structure:\n"
+    '{\n'
+    '  "blocks": [\n'
+    '    {\n'
+    '      "text": "extracted text",\n'
+    '      "bbox": [x1, y1, x2, y2],\n'
+    '      "confidence": 0.0\n'
+    '    }\n'
+    "  ]\n"
+    "}\n\n"
+    "- Extract text as accurately as possible.\n"
+    "- Provide bounding boxes in [x1, y1, x2, y2] pixel coordinates.\n"
+    "- Estimate confidence (0.0 to 1.0) for each block.\n"
+    "- Group text into logical blocks (paragraphs, headings, lists).\n"
+    "- Include ALL visible text, including small captions and footnotes."
+)
 
 
 class OcrClient:
@@ -60,36 +81,27 @@ class OcrClient:
         page_number: int = 1,
     ) -> list[OcrBlockDTO]:
         """Send a page image to Gemma 4 for OCR text extraction."""
-        system_prompt = (
-            "You are an OCR assistant. Extract all text from the page image.\n\n"
-            "Return ONLY valid JSON with this structure:\n"
-            '{\n'
-            '  "blocks": [\n'
-            '    {\n'
-            '      "text": "extracted text",\n'
-            '      "bbox": [x1, y1, x2, y2],\n'
-            '      "confidence": 0.0\n'
-            '    }\n'
-            "  ]\n"
-            "}\n\n"
-            "- Extract text as accurately as possible.\n"
-            "- Provide bounding boxes in [x1, y1, x2, y2] pixel coordinates.\n"
-            "- Estimate confidence (0.0 to 1.0) for each block.\n"
-            "- Group text into logical blocks (paragraphs, headings, lists).\n"
-            "- Include ALL visible text, including small captions and footnotes."
-        )
-
         with open(image_path, "rb") as f:
             image_bytes = f.read()
+        image_b64 = base64.b64encode(image_bytes).decode("ascii")
 
-        files = [
-            ("file", ("page.png", image_bytes, "image/png")),
-        ]
-        data = {
+        payload = {
             "model": self._model,
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Extract all text from page {page_number}."},
+                {"role": "system", "content": _OCR_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                        },
+                        {
+                            "type": "text",
+                            "text": f"Extract all text from page {page_number}.",
+                        },
+                    ],
+                },
             ],
             "max_tokens": 8192,
             "temperature": 0.1,
@@ -102,15 +114,14 @@ class OcrClient:
             page_number,
         )
 
-        headers: dict[str, str] = {}
+        headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._password:
             headers["Authorization"] = f"Bearer {self._password}"
 
         try:
             response = await self._http.post(
                 f"{self._base_url}/chat/completions",
-                data=data,
-                files=files,
+                json=payload,
                 headers=headers,
             )
         except httpx.TimeoutException as exc:
