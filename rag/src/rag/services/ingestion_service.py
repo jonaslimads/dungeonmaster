@@ -1,6 +1,8 @@
 import logging
 from pathlib import Path
 
+import fitz
+
 from rag.clients.pdf_client import PdfClient
 from rag.clients.storage_client import StorageClient
 from rag.services.image_cropping_service import ImageCroppingService
@@ -40,6 +42,9 @@ class IngestionService:
         pdf_path: Path,
         use_vlm: bool = False,
         force: bool = False,
+        offset: int = 0,
+        limit: int = 0,
+        batch_size: int | None = None,
     ) -> dict[str, str]:
         """Run the full extraction pipeline for a source in batches.
 
@@ -49,25 +54,37 @@ class IngestionService:
             use_vlm: If True, run VLM layout analysis + asset detection.
             force: If True, start from scratch. If False, resume from
                    the last processed page.
+            offset: 0-based page offset (first page = offset 0).
+            limit: Max pages to process (0 = all remaining pages).
+            batch_size: Pages per batch (default from constructor).
 
         Each batch renders pages, extracts text, optionally runs VLM,
         and appends results to disk immediately.
         """
+        bs = batch_size if batch_size is not None else self._batch_size
         logger.info(
-            "run_pipeline: source=%s use_vlm=%s force=%s batch_size=%d",
+            "run_pipeline: source=%s use_vlm=%s force=%s offset=%d limit=%d batch_size=%d",
             source_id,
             use_vlm,
             force,
-            self._batch_size,
+            offset,
+            limit,
+            bs,
         )
 
         page_count = self._pdf.get_page_count(pdf_path)
 
+        # Compute the effective page range from offset + limit
+        first_page = offset + 1  # 1-based
+        last_page = page_count if limit == 0 else first_page + limit - 1
+        last_page = min(last_page, page_count)  # cap at total
+
         if force:
             self._clear_output(source_id)
-            start_page = 1
+            start_page = first_page
         else:
             start_page = self._resume_page(source_id, page_count)
+            start_page = max(start_page, first_page)  # don't go before offset
             logger.info(
                 "run_pipeline: source=%s resuming from page %d",
                 source_id,
@@ -79,8 +96,8 @@ class IngestionService:
         all_vlm_skipped: list[dict] = []
         seen_asset_ids: set[str] = set()
 
-        for batch_start in range(start_page, page_count + 1, self._batch_size):
-            batch_end = min(batch_start + self._batch_size - 1, page_count)
+        for batch_start in range(start_page, last_page + 1, bs):
+            batch_end = min(batch_start + bs - 1, last_page)
             logger.info(
                 "run_pipeline: source=%s batch %d-%d / %d",
                 source_id,
@@ -89,14 +106,14 @@ class IngestionService:
                 page_count,
             )
 
-            # Render batch
-            self._rendering.render_pages(
+            # Extract batch as single-page PDFs
+            self._rendering.extract_pages(
                 source_id=source_id,
                 pdf_path=pdf_path,
                 page_range=range(batch_start, batch_end + 1),
             )
 
-            # Extract native text for batch (in-memory, saved later)
+            # Extract native text for batch
             blocks = self._native_text.extract(
                 source_id=source_id,
                 pdf_path=pdf_path,
@@ -108,6 +125,7 @@ class IngestionService:
             if use_vlm:
                 skipped = await self._layout.analyze_pages(
                     source_id=source_id,
+                    pdf_path=pdf_path,
                     page_range=range(batch_start, batch_end + 1),
                 )
                 all_vlm_skipped.extend(skipped)
@@ -126,6 +144,45 @@ class IngestionService:
                 seen_asset_ids.update(a.get("id", str(a)) for a in new_assets)
                 all_assets.extend(new_assets)
 
+            # --- Flush batch results to disk ---
+
+            # Save native text blocks (append)
+            native_records = [
+                {
+                    "page_number": blk.page_number,
+                    "block_index": blk.block_index,
+                    "block_type": blk.block_type,
+                    "text": blk.text,
+                    "bbox": blk.bbox,
+                }
+                for blk in blocks
+            ]
+            self._storage.save_jsonl(
+                self._storage.get_extracted_dir(source_id) / "native_text.jsonl",
+                native_records,
+            )
+
+            # Build canonical pages.jsonl + book.md from this batch
+            self._markdown.build_from_native_text(
+                source_id=source_id,
+                native_blocks=blocks,
+                append=True,
+            )
+            self._markdown.rebuild_book_md(source_id)
+
+            # Append skipped VLM pages (if any)
+            if use_vlm and skipped:
+                self._storage.save_jsonl(
+                    self._storage.get_extracted_dir(source_id) / "vlm_skipped.jsonl",
+                    skipped,
+                )
+
+            logger.info(
+                "run_pipeline: source=%s batch %d-%d flushed to disk",
+                source_id,
+                batch_start,
+                batch_end,
+            )
             logger.info(
                 "run_pipeline: source=%s progress %d/%d pages",
                 source_id,
@@ -133,27 +190,12 @@ class IngestionService:
                 page_count,
             )
 
-        # Save native_text.jsonl (all blocks, single write)
-        native_records = [
-            {
-                "page_number": blk.page_number,
-                "block_index": blk.block_index,
-                "block_type": blk.block_type,
-                "text": blk.text,
-                "bbox": blk.bbox,
-            }
-            for blk in all_native_blocks
-        ]
-        native_path = (
-            self._storage.get_extracted_dir(source_id) / "native_text.jsonl"
-        )
-        if native_path.exists():
-            native_path.unlink()
-        self._storage.save_jsonl(native_path, native_records)
+        # --- Final aggregation (after all batches) ---
+
         logger.info(
-            "run_pipeline: source=%s saved %d native text blocks",
+            "run_pipeline: source=%s all batches done, %d native blocks total",
             source_id,
-            len(native_records),
+            len(all_native_blocks),
         )
 
         # Process all visual assets at once (crop + save)
@@ -171,30 +213,16 @@ class IngestionService:
                 len(cropped_assets),
             )
 
-        # Build canonical markdown from all native blocks (single write)
-        self._markdown.build_from_native_text(
-            source_id=source_id,
-            native_blocks=all_native_blocks,
-            append=False,
-        )
-
-        # Save skipped VLM pages to extracted/
+        # Save final quality report
         if use_vlm and all_vlm_skipped:
             skipped_path = (
                 self._storage.get_extracted_dir(source_id) / "vlm_skipped.jsonl"
             )
-            if skipped_path.exists():
-                skipped_path.unlink()
-            self._storage.save_jsonl(skipped_path, all_vlm_skipped)
             logger.info(
-                "run_pipeline: source=%s saved %d skipped VLM pages to %s",
+                "run_pipeline: source=%s total %d skipped VLM pages",
                 source_id,
                 len(all_vlm_skipped),
-                skipped_path,
             )
-
-        # Rebuild book.md from pages.jsonl
-        self._markdown.rebuild_book_md(source_id)
 
         # Final quality report
         report = self._generate_quality_report(
@@ -224,18 +252,18 @@ class IngestionService:
         if not pages_dir.exists():
             return 1
 
-        rendered = set()
-        for f in pages_dir.glob("page_*.png"):
+        extracted = set()
+        for f in pages_dir.glob("page_*.pdf"):
             try:
                 num = int(f.stem.split("_")[1])
-                rendered.add(num)
+                extracted.add(num)
             except (ValueError, IndexError):
                 continue
 
-        if not rendered:
+        if not extracted:
             return 1
 
-        max_rendered = max(rendered)
+        max_extracted = max(extracted)
 
         # Check native_text.jsonl to confirm text was extracted
         native_path = (
@@ -248,10 +276,10 @@ class IngestionService:
                     r.get("page_number") for r in records
                 }
                 max_text = max(pages_with_text) if pages_with_text else 0
-                # Use the lower of rendered vs text-extracted
-                # (if pages were rendered but text wasn't extracted, re-process)
-                if max_text < max_rendered:
-                    max_rendered = max_text
+                # Use the lower of extracted vs text-extracted
+                # (if pages were extracted but text wasn't, re-process)
+                if max_text < max_extracted:
+                    max_extracted = max_text
             else:
                 return 1
         else:
@@ -268,19 +296,19 @@ class IngestionService:
                     r.get("page_number") for r in records
                 }
                 max_canonical = max(pages_canonical) if pages_canonical else 0
-                if max_canonical < max_rendered:
-                    max_rendered = max_canonical
+                if max_canonical < max_extracted:
+                    max_extracted = max_canonical
             else:
                 return 1
         else:
             return 1
 
-        next_page = max_rendered + 1
+        next_page = max_extracted + 1
         if next_page > total_pages:
             logger.info(
                 "_resume_page: source=%s already complete (%d/%d)",
                 source_id,
-                max_rendered,
+                max_extracted,
                 total_pages,
             )
             return total_pages + 1
@@ -291,7 +319,7 @@ class IngestionService:
         """Clear previous output files for a fresh run."""
         pages_dir = self._storage.get_pages_dir(source_id)
         if pages_dir.exists():
-            for f in pages_dir.glob("*.png"):
+            for f in pages_dir.glob("*.pdf"):
                 f.unlink()
 
         assets_images = self._storage.get_assets_images_dir(source_id)
@@ -325,15 +353,18 @@ class IngestionService:
         assets: list[dict],
     ) -> list:
         """Process visual assets: validate and crop."""
-        from PIL import Image
+        import fitz
 
-        pages_dir = self._storage.get_pages_dir(source_id)
-        sample_image = pages_dir / "page_0001.png"
+        from rag.clients.storage_client import StorageClient
 
-        page_width, page_height = 800, 1100
-        if sample_image.exists():
-            with Image.open(str(sample_image)) as img:
-                page_width, page_height = img.size
+        pdf_path = Path(
+            StorageClient.get_original_dir(source_id) / "source.pdf"
+        )
+        doc = fitz.open(str(pdf_path))
+        page = doc[0]
+        page_width = int(page.rect.width)
+        page_height = int(page.rect.height)
+        doc.close()
 
         page_assets_map: dict[int, list[dict]] = {}
         for asset_info in assets:

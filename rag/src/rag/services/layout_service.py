@@ -17,34 +17,25 @@ class LayoutService:
         self,
         *,
         source_id: str,
+        pdf_path: Path,
         page_range: range,
     ) -> list[dict]:
         """Run VLM layout analysis on a range of pages.
 
+        Sends single-page PDFs to the upstream proxy which handles conversion.
+
         Returns a list of skipped-page records with page_number and reason.
         Failed pages are skipped — the pipeline continues processing the rest.
         """
-        pages_dir = self._storage.get_pages_dir(source_id)
         batch_size = settings.vlm_batch_pages
         layout_records: list[dict] = []
         skipped_pages: list[dict] = []
+        total_analyzed = 0
 
         for page_num in page_range:
-            image_path = pages_dir / f"page_{page_num:04d}.png"
-            if not image_path.exists():
-                logger.warning(
-                    "analyze_pages: image missing for page %d, skipping",
-                    page_num,
-                )
-                skipped_pages.append({
-                    "page_number": page_num,
-                    "reason": "image_missing",
-                })
-                continue
-
             try:
                 analysis = await self._vlm.analyze_page_layout(
-                    page_image_path=image_path,
+                    pdf_path=pdf_path,
                     page_number=page_num,
                 )
             except Exception as exc:
@@ -86,6 +77,7 @@ class LayoutService:
                 ],
             }
             layout_records.append(record)
+            total_analyzed += 1
 
             if len(layout_records) >= batch_size:
                 output = self._storage.get_extracted_dir(source_id) / "vlm_layout.jsonl"
@@ -114,7 +106,7 @@ class LayoutService:
             source_id,
             page_range[0],
             page_range[-1],
-            len(layout_records) + sum(1 for _ in []),
+            total_analyzed,
             len(skipped_pages),
         )
         return skipped_pages
