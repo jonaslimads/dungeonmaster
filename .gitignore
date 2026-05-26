@@ -1,4 +1,7 @@
+data/
+
 # Environment
+.env
 .env.local
 
 # SSL certs (regenerate with build/ssl/generate.sh)
@@ -10,12 +13,14 @@ build/ssl/combined.pem
 __pycache__/
 *.pyc
 .venv/
+uv.lock
 
 # Node
 node_modules/
 .next/
 out/
 next-env.d.ts
+tsconfig.tsbuildinfo
 
 # Data
 data/audio/input/*

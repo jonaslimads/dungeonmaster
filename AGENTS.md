@@ -16,10 +16,12 @@
 # ✅ Correct
 from voice.auth.token import verify_token
 from voice.clients.llm_client import LLMClient
+from rag.clients.pdf_client import PdfClient
 
 # ❌ Wrong
 from voice.auth import verify_token          # __init__.py is empty
 from voice.clients import LLMClient          # same
+from rag.clients import PdfClient            # same
 ```
 
 ### No inline comments unless necessary
@@ -60,6 +62,20 @@ class Turn:
     assistant_text: str
 ```
 
+### Client DTOs use `__slots__`
+
+Internal client DTOs use `__slots__` classes (not Pydantic) to keep them lightweight. Domain models, request models, and response models always use Pydantic.
+
+```python
+# ✅ Client DTO — lightweight
+class ChatCompletionDTO:
+    __slots__ = ("content", "usage")
+
+    def __init__(self, content: str, usage: dict | None = None) -> None:
+        self.content = content
+        self.usage = usage
+```
+
 ---
 
 ## Tests
@@ -79,9 +95,6 @@ tests/
 ├── clients/
 │   ├── __init__.py
 │   └── test_llm_client.py
-├── auth/
-│   ├── __init__.py
-│   └── test_token.py
 └── routers/
     ├── __init__.py
     └── test_turns.py
@@ -120,7 +133,7 @@ src/<service>/
 ├── clients/             # External API clients (transport layer)
 │   ├── __init__.py      # empty
 │   └── llm_client.py
-├── auth/                # Authentication helpers
+├── auth/                # Authentication helpers (optional)
 │   ├── __init__.py      # empty
 │   └── token.py
 └── routers/             # HTTP endpoints
@@ -134,7 +147,7 @@ src/<service>/
 
 | Layer | File pattern | Class naming |
 |---|---|---|
-| `models/` | `<entity>.py` | `Turn`, `Conversation` (no prefix/suffix) |
+| `models/` | `<entity>.py` | `Turn`, `Conversation`, `Source` (no prefix/suffix) |
 | `routers/` | `<feature>_requests.py` | `TextTurnRequest`, `AudioTurnRequest` |
 | `routers/` | `<feature>_responses.py` | `TurnResponse`, `HealthResponse` |
 | `routers/` | `<feature>_router.py` | `router = APIRouter(...)` |
@@ -173,7 +186,7 @@ class LLMService:
 
 Clients handle transport: HTTP calls, retries, timeouts, auth headers. Each client defines its own internal `*DTO` classes. These **never leak** into services or routers.
 
-**LLM client pattern** (follow the dietgen / goshare reference):
+**HTTP client pattern** (follow the voice reference):
 
 ```python
 class LLMClient:
@@ -190,6 +203,7 @@ Key decisions:
 - `chat()` always sends `chat_template_kwargs: {"enable_thinking": False}` to disable reasoning mode.
 - `max_tokens: 2048` as default.
 - Logging via `logging.getLogger(__name__)` with structured messages.
+- VLM clients send images via multipart form data (`files=` parameter).
 
 ### `routers/` — HTTP Endpoints
 
@@ -271,13 +285,72 @@ routers  →  services  →  clients
 
 ---
 
+## Data Directory
+
+All persistent data lives in `data/`. The entire directory is `.gitignore`d.
+
+```
+data/
+├── audio/           # Voice service audio I/O
+├── campaigns/       # Campaign data (future)
+├── pdfs/            # Raw PDFs placed manually
+└── rag/
+    └── sources/     # Processed RAG output (generated, never committed)
+```
+
+### RAG source output structure
+
+Each source generates its own directory under `data/rag/sources/<source_id>/`:
+
+```
+<source_id>/
+├── original/
+│   └── source.pdf
+├── pages/
+│   ├── page_0001.png
+│   └── page_0002.png
+├── assets/
+│   ├── images/
+│   │   └── page_0042_img_001.png
+│   └── thumbnails/
+│       └── page_0042_img_001.webp
+├── extracted/
+│   ├── native_text.jsonl
+│   ├── ocr_blocks.jsonl          (optional, VLM OCR)
+│   ├── vlm_layout.jsonl          (optional, VLM layout)
+│   └── image_assets.jsonl        (optional, VLM assets)
+├── canonical/
+│   ├── pages.jsonl
+│   ├── book.md
+│   └── sections.jsonl            (future, chunking phase)
+├── chunks/                       (future, chunking phase)
+│   ├── parent_chunks.jsonl
+│   └── child_chunks.jsonl
+└── reports/
+    ├── quality_report.md
+    └── low_confidence_pages.md   (future)
+```
+
+### Pipeline resume behavior
+
+The ingestion pipeline processes pages in **batches of 10** and saves incrementally. By default (`force=false`), it resumes from the last processed page by checking:
+1. Page images in `pages/`
+2. Records in `extracted/native_text.jsonl`
+3. Records in `canonical/pages.jsonl`
+
+Use `force=true` to start from scratch.
+
+---
+
 ## Docker & Build
 
 - **Backend**: `uv` manages dependencies. Dockerfile copies `src/` before `uv sync`.
 - **Frontend**: Next.js with `output: "standalone"` for minimal Docker images.
 - **`.dockerignore`** excludes `node_modules/`, `.next/`, `data/`, `.venv/`.
-- **`docker-compose.yml`** orchestrates both services. `extra_hosts` for `host.docker.internal`.
+- **`docker-compose.yml`** orchestrates all services. `extra_hosts` for `host.docker.internal`.
 - **`pyproject.toml`** uses `hatchling` with `[tool.hatch.build.targets.wheel] packages = ["src/<service>"]`.
+- Services mount `src/` via volume for hot reload during development.
+- `data/` is shared via volume across voice and rag services.
 
 ---
 

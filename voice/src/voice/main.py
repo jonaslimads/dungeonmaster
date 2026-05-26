@@ -1,5 +1,3 @@
-import asyncio
-
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -32,12 +30,6 @@ async def lifespan(app: FastAPI):
     app.state.tts_client = tts_client
     register_tts(lambda: TTSService(client=tts_client, default_voice=settings.tts_voice))
 
-    await asyncio.gather(
-        llm_client.warm_up(),
-        stt_client.warm_up(),
-        tts_client.warm_up(),
-    )
-
     yield
     await llm_client.close()
     await stt_client.close()
@@ -63,3 +55,16 @@ app.include_router(turns_router)
 @app.get("/api/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/warmup")
+async def warmup() -> dict[str, str]:
+    llm_client: LLMClient = app.state.llm_client
+    stt_client: STTClient = app.state.stt_client
+    tts_client: TTSClient = app.state.tts_client
+
+    await llm_client.warm_up()
+    await stt_client.warm_up()
+    await tts_client.warm_up()
+
+    return {"status": "warmed_up"}
