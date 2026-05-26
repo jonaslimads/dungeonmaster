@@ -35,7 +35,7 @@ class MarkdownService:
                 pages[page_num] = ExtractedPage(
                     source_id=source_id,
                     page_number=page_num,
-                    image_path=f"pages/page_{page_num:04d}.png",
+                    image_path=f"pages/page_{page_num:04d}.pdf",
                     markdown="",
                     blocks=[],
                     image_asset_ids=[],

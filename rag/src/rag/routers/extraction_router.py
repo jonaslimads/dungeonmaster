@@ -31,6 +31,9 @@ async def create_job(
         source_id=request.source_id,
         use_vlm=request.use_vlm,
         force=request.force,
+        offset=request.offset,
+        limit=request.limit,
+        batch_size=request.batch_size,
     )
     return ExtractionJobResponse.model_validate(job.model_dump())
 

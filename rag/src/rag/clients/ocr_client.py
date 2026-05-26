@@ -49,13 +49,19 @@ _OCR_SYSTEM_PROMPT = (
 
 
 class OcrClient:
-    """OCR via Gemma 4 VLM — sends page images and extracts text blocks."""
+    """OCR via Gemma 4 VLM — sends single-page PDFs and extracts text blocks.
+
+    The upstream proxy (gemma-4-31b-pdf) handles PDF-to-image conversion.
+    """
 
     def __init__(self, *, timeout_seconds: int = 300) -> None:
+        from rag.clients.pdf_client import PdfClient
+
         self._base_url = settings.vlm_url.rstrip("/")
         self._password = settings.vlm_password
         self._model = settings.vlm_model
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds))
+        self._pdf = PdfClient()
         logger.info(
             "OcrClient: url=%s model=%s timeout=%ds",
             self._base_url,
@@ -74,16 +80,18 @@ class OcrClient:
     async def close(self) -> None:
         await self._http.aclose()
 
-    async def extract_text_from_image(
+    async def extract_text_from_pdf(
         self,
         *,
-        image_path: Path,
+        pdf_path: Path,
         page_number: int = 1,
     ) -> list[OcrBlockDTO]:
-        """Send a page image to Gemma 4 for OCR text extraction."""
-        with open(image_path, "rb") as f:
-            image_bytes = f.read()
-        image_b64 = base64.b64encode(image_bytes).decode("ascii")
+        """Send a single-page PDF to the upstream proxy for OCR text extraction.
+
+        The proxy handles PDF-to-image conversion internally.
+        """
+        page_pdf_bytes = self._pdf.extract_page_as_pdf(pdf_path, page_number - 1)
+        pdf_b64 = base64.b64encode(page_pdf_bytes).decode("ascii")
 
         payload = {
             "model": self._model,
@@ -93,8 +101,10 @@ class OcrClient:
                     "role": "user",
                     "content": [
                         {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                            "type": "file",
+                            "file": {
+                                "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                            },
                         },
                         {
                             "type": "text",
@@ -108,7 +118,7 @@ class OcrClient:
         }
 
         logger.info(
-            "extract_text_from_image: POST %s/chat/completions model=%s page=%d",
+            "extract_text_from_pdf: POST %s/chat/completions model=%s page=%d",
             self._base_url,
             self._model,
             page_number,
@@ -126,14 +136,14 @@ class OcrClient:
             )
         except httpx.TimeoutException as exc:
             logger.error(
-                "extract_text_from_image TIMEOUT: page=%d error=%s",
+                "extract_text_from_pdf TIMEOUT: page=%d error=%s",
                 page_number,
                 exc,
             )
             raise RuntimeError(f"OCR request timed out for page {page_number}") from exc
         except httpx.RequestError as exc:
             logger.error(
-                "extract_text_from_image REQUEST_ERROR: page=%d error=%s",
+                "extract_text_from_pdf REQUEST_ERROR: page=%d error=%s",
                 page_number,
                 exc,
             )
@@ -141,7 +151,7 @@ class OcrClient:
 
         if response.status_code >= 400:
             logger.error(
-                "extract_text_from_image ERROR_RESPONSE: page=%d status=%d body=%s",
+                "extract_text_from_pdf ERROR_RESPONSE: page=%d status=%d body=%s",
                 page_number,
                 response.status_code,
                 response.text[:1000],
@@ -153,7 +163,7 @@ class OcrClient:
 
         blocks = self._parse_ocr_response(content, page_number)
         logger.info(
-            "extract_text_from_image OK: page=%d blocks=%d",
+            "extract_text_from_pdf OK: page=%d blocks=%d",
             page_number,
             len(blocks),
         )

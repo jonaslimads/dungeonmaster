@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     rag_sources_dir: Path | None = None
 
     # PDF rendering
-    page_render_dpi: int = 150
+    page_render_dpi: int = 125
 
     # VLM batch size (pages per request for layout/OCR)
     vlm_batch_pages: int = 10

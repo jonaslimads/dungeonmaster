@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 
@@ -20,6 +21,9 @@ class ExtractionService:
         source_id: str,
         use_vlm: bool = False,
         force: bool = False,
+        offset: int = 0,
+        limit: int = 0,
+        batch_size: int = 10,
     ) -> ExtractionJob:
         """Create a new extraction job."""
         job_id = f"job_{uuid.uuid4().hex[:12]}"
@@ -30,6 +34,9 @@ class ExtractionService:
             progress={
                 "_use_vlm": use_vlm,
                 "_force": force,
+                "_offset": offset,
+                "_limit": limit,
+                "_batch_size": batch_size,
                 "pages_rendered": False,
                 "native_text_extracted": False,
                 "vlm_layout_analyzed": False,
@@ -40,21 +47,34 @@ class ExtractionService:
         )
         self._jobs[job_id] = job
         logger.info(
-            "create_job: job=%s source=%s use_vlm=%s force=%s",
+            "create_job: job=%s source=%s use_vlm=%s force=%s offset=%d limit=%d batch_size=%d",
             job_id,
             source_id,
             use_vlm,
             force,
+            offset,
+            limit,
+            batch_size,
         )
         return job
 
     async def run_job(self, job_id: str) -> ExtractionJob:
-        """Run an extraction job."""
+        """Start an extraction job in the background and return immediately."""
         job = self._jobs.get(job_id)
         if job is None:
             raise ValueError(f"Job not found: {job_id}")
 
         job.status = "running"
+        logger.info("run_job: job=%s started (background)", job_id)
+        asyncio.create_task(self._execute_job(job_id))
+        return job
+
+    async def _execute_job(self, job_id: str) -> None:
+        """Execute the extraction pipeline in the background."""
+        job = self._jobs.get(job_id)
+        if job is None:
+            return
+
         progress = job.progress or {}
 
         try:
@@ -72,6 +92,9 @@ class ExtractionService:
                 pdf_path=pdf_path,
                 use_vlm=progress.get("_use_vlm", False),
                 force=progress.get("_force", False),
+                offset=progress.get("_offset", 0),
+                limit=progress.get("_limit", 0),
+                batch_size=progress.get("_batch_size", 10),
             )
 
             progress.update({
@@ -90,8 +113,6 @@ class ExtractionService:
             job.status = "failed"
             job.error = str(exc)
             logger.error("run_job: job=%s failed: %s", job_id, exc)
-
-        return job
 
     def get_job(self, job_id: str) -> ExtractionJob | None:
         """Get a job by ID."""

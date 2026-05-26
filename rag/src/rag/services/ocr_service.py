@@ -16,23 +16,18 @@ class OcrService:
         self,
         *,
         source_id: str,
+        pdf_path: Path,
         page_numbers: list[int],
     ) -> None:
-        """Run VLM OCR on specific pages and save results."""
-        pages_dir = self._storage.get_pages_dir(source_id)
+        """Run VLM OCR on specific pages and save results.
+
+        Sends single-page PDFs to the upstream proxy which handles conversion.
+        """
         all_blocks: list[dict] = []
 
         for page_num in page_numbers:
-            image_path = pages_dir / f"page_{page_num:04d}.png"
-            if not image_path.exists():
-                logger.warning(
-                    "run_ocr: page image missing: %s",
-                    image_path,
-                )
-                continue
-
-            blocks = await self._ocr.extract_text_from_image(
-                image_path=image_path,
+            blocks = await self._ocr.extract_text_from_pdf(
+                pdf_path=pdf_path,
                 page_number=page_num,
             )
             all_blocks.extend(

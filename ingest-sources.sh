@@ -4,6 +4,9 @@ set -euo pipefail
 BASE="${RAG_BASE_URL:-http://localhost:8002}"
 USE_VLM="${USE_VLM:-false}"
 FORCE="${FORCE:-false}"
+OFFSET="${OFFSET:-0}"
+LIMIT="${LIMIT:-0}"
+BATCH_SIZE="${BATCH_SIZE:-10}"
 
 SOURCES=(
   "D.D.5E.-.Livro.do.Jogador.Fundo.Colorido.pdf|D&D 5E Player's Handbook|core_rulebook|dnd_5e|dnd_5e_players_handbook"
@@ -65,13 +68,16 @@ process_source() {
   fi
 
   # Step 2: Create job
-  echo "[2/3] Creating extraction job (use_vlm=$USE_VLM, force=$FORCE)..."
+  echo "[2/3] Creating extraction job (use_vlm=$USE_VLM, force=$FORCE, offset=$OFFSET, limit=$LIMIT, batch=$BATCH_SIZE)..."
   job_id=$(curl -s -X POST "$BASE/extraction/jobs" \
     -H "Content-Type: application/json" \
     -d "{
       \"source_id\": \"$source_id\",
       \"use_vlm\": $USE_VLM,
-      \"force\": $FORCE
+      \"force\": $FORCE,
+      \"offset\": $OFFSET,
+      \"limit\": $LIMIT,
+      \"batch_size\": $BATCH_SIZE
     }" | jq -r '.id')
   echo "  ✓ Job: $job_id"
 
@@ -89,6 +95,7 @@ echo "RAG Ingestion Script"
 echo "Base URL: $BASE"
 echo "Use VLM: $USE_VLM"
 echo "Force: $FORCE"
+echo "Offset: $OFFSET | Limit: $LIMIT | Batch: $BATCH_SIZE"
 echo ""
 
 for source in "${SOURCES[@]}"; do

@@ -107,3 +107,19 @@ class PdfClient:
         text = page.get_text("text").strip()
         doc.close()
         return text
+
+    def extract_page_as_pdf(self, pdf_path: Path, page_index: int) -> bytes:
+        """Extract a single page from the PDF as a new single-page PDF (bytes)."""
+        doc = fitz.open(str(pdf_path))
+        new_doc = fitz.open()
+        new_doc.insert_pdf(doc, from_page=page_index, to_page=page_index)
+        page_pdf = new_doc.tobytes()
+        new_doc.close()
+        doc.close()
+        logger.debug(
+            "extract_page_as_pdf: path=%s page=%d size=%d bytes",
+            pdf_path,
+            page_index + 1,
+            len(page_pdf),
+        )
+        return page_pdf

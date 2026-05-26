@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 MAX_VLM_RETRIES = 5
 VLM_RETRY_BASE_DELAY = 2.0
+VLM_RETRY_ON_TIMEOUT = True
 
 
 class VlmLayoutBlockDTO:
@@ -161,11 +162,14 @@ _VLM_SYSTEM_PROMPT = (
 
 
 class VlmClient:
-    def __init__(self, *, timeout_seconds: int = 120) -> None:
+    def __init__(self, *, timeout_seconds: int = 300) -> None:
+        from rag.clients.pdf_client import PdfClient
+
         self._base_url = settings.vlm_url.rstrip("/")
         self._password = settings.vlm_password
         self._model = settings.vlm_model
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds))
+        self._pdf = PdfClient()
         logger.info(
             "VlmClient: url=%s model=%s timeout=%ds",
             self._base_url,
@@ -187,22 +191,24 @@ class VlmClient:
     async def analyze_page_layout(
         self,
         *,
-        page_image_path: Path,
+        pdf_path: Path,
         page_number: int,
     ) -> VlmPageAnalysisDTO:
-        """Send a page image to Gemma 4 for layout analysis, OCR, and visual asset detection."""
+        """Send a single-page PDF to the upstream proxy for layout analysis, OCR, and visual asset detection.
+
+        The proxy (gemma-4-31b-pdf) handles PDF-to-image conversion internally.
+        """
         t0 = time.monotonic()
 
-        with open(page_image_path, "rb") as f:
-            image_bytes = f.read()
-        image_size_kb = len(image_bytes) / 1024
-        image_b64 = base64.b64encode(image_bytes).decode("ascii")
+        page_pdf_bytes = self._pdf.extract_page_as_pdf(pdf_path, page_number - 1)
+        pdf_size_kb = len(page_pdf_bytes) / 1024
+        pdf_b64 = base64.b64encode(page_pdf_bytes).decode("ascii")
 
         t_encode = time.monotonic() - t0
         logger.info(
-            "analyze_page_layout: page=%d image=%0.1fKB encode=%0.2fs",
+            "analyze_page_layout: page=%d pdf=%0.1fKB encode=%0.2fs",
             page_number,
-            image_size_kb,
+            pdf_size_kb,
             t_encode,
         )
 
@@ -214,8 +220,10 @@ class VlmClient:
                     "role": "user",
                     "content": [
                         {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                            "type": "file",
+                            "file": {
+                                "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                            },
                         },
                         {
                             "type": "text",
@@ -359,9 +367,22 @@ class VlmClient:
                     elapsed,
                     exc,
                 )
-                raise RuntimeError(
-                    f"VLM request timed out for page {page_number}"
-                ) from exc
+
+                if not VLM_RETRY_ON_TIMEOUT or attempt >= MAX_VLM_RETRIES:
+                    raise RuntimeError(
+                        f"VLM request timed out for page {page_number}"
+                    ) from exc
+
+                backoff = VLM_RETRY_BASE_DELAY * 2 ** attempt
+                logger.warning(
+                    "analyze_page_layout RETRY_TIMEOUT: page=%d attempt=%d/%d backoff=%0.1fs",
+                    page_number,
+                    attempt + 1,
+                    MAX_VLM_RETRIES,
+                    backoff,
+                )
+                await asyncio.sleep(backoff)
+                continue
             except httpx.RequestError as exc:
                 elapsed = time.monotonic() - t0
                 logger.error(

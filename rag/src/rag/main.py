@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -25,6 +26,13 @@ from rag.services.chunking_service import ChunkingService
 from rag.services.extraction_service import ExtractionService
 from rag.services.retrieval_service import RetrievalService
 from rag.services.source_service import SourceService
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 
 @asynccontextmanager

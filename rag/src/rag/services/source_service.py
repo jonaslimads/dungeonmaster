@@ -97,7 +97,7 @@ class SourceService:
         if (extracted / "native_text.jsonl").exists():
             return "text_extracted"
         if (source_dir / "pages").exists():
-            page_files = list((source_dir / "pages").glob("*.png"))
+            page_files = list((source_dir / "pages").glob("*.pdf"))
             if page_files:
                 return "pages_rendered"
         if (source_dir / "original" / "source.pdf").exists():
