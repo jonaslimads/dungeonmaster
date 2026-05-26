@@ -4,10 +4,22 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # OpenAI-compatible LLM (qwen3.6-27b-mtp)
-    open_ai_url: str = "http://192.168.0.141:19000/v1"
-    open_ai_password: str = "admin-server"
-    open_ai_model: str = "qwen3.6-27b-mtp"
+    # LLM
+    llm_url: str = "http://192.168.0.141:19000/v1"
+    llm_password: str = "admin-server"
+    llm_model: str = "qwen3.6-27b-mtp-140k"
+
+    # STT — Speech-to-Text via whisper.cpp
+    stt_url: str = "http://192.168.0.141:19000/v1"
+    stt_password: str = "admin-server"
+    stt_model: str = "whisper-base"
+
+    # TTS — Text-to-Speech via Kokoro-FastAPI
+    tts_url: str = "http://192.168.0.141:19000/v1"
+    tts_password: str = "admin-server"
+    tts_model: str = "kokoro"
+    tts_voice: str = "pf_dora"
+    tts_lang_code: str = "p"
 
     # Auth
     api_token: str | None = None

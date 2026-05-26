@@ -1,12 +1,12 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect } from "react";
-import { sendAudio, type SSEEvent } from "@/lib/api";
+import { sendAudio, playAudio, type SSEEvent, TTS_VOICES } from "@/lib/api";
 
 type Message =
   | { id: string; type: "system"; text: string }
   | { id: string; type: "user"; text: string }
-  | { id: string; type: "assistant"; text: string }
+  | { id: string; type: "assistant"; text: string; voice: string }
   | { id: string; type: "error"; text: string };
 
 let msgId = 0;
@@ -20,6 +20,12 @@ export function PushToTalk() {
   const [isRecording, setIsRecording] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [selectedVoice, setSelectedVoice] = useState("pf_dora");
+  const voiceRef = useRef(selectedVoice);
+
+  useEffect(() => {
+    voiceRef.current = selectedVoice;
+  }, [selectedVoice]);
 
   const appendMessage = useCallback((msg: Message) => {
     setMessages((prev) => [...prev, msg]);
@@ -45,9 +51,15 @@ export function PushToTalk() {
         case "transcript":
           appendMessage({ id: uid(), type: "user", text: evt.text });
           break;
-        case "assistant":
-          appendMessage({ id: uid(), type: "assistant", text: evt.text });
-          setIsLoading(false);
+        case "assistant": {
+          const voice = voiceRef.current;
+          appendMessage({ id: uid(), type: "assistant", text: evt.text, voice });
+          break;
+        }
+        case "audio":
+          playAudio(evt.audio).catch((err) => {
+            console.error("Failed to play audio:", err);
+          });
           break;
         case "error":
           appendMessage({ id: uid(), type: "error", text: evt.message });
@@ -118,8 +130,10 @@ export function PushToTalk() {
 
   async function handleAudio(audioBlob: Blob) {
     setIsLoading(true);
+    const voice = voiceRef.current;
+    console.log("[handleAudio] voice=", voice);
     try {
-      await sendAudio(audioBlob, handleEvent);
+      await sendAudio(audioBlob, voice, handleEvent);
     } catch (err) {
       appendMessage({
         id: uid(),
@@ -148,11 +162,31 @@ export function PushToTalk() {
             dungeonmaster
           </h1>
         </div>
-        <div className="flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-0.5">
-          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-          <span className="text-[10px] font-medium text-emerald-400/80">
-            voice ready
-          </span>
+
+        <div className="flex items-center gap-3">
+          {/* Voice selector */}
+          <div className="flex items-center gap-1.5 rounded-full border border-void-700/50 bg-void-900/60 px-2 py-1">
+            <span className="text-[10px] text-void-500">🔊</span>
+            <select
+              value={selectedVoice}
+              onChange={(e) => setSelectedVoice(e.target.value)}
+              className="bg-transparent text-[11px] font-medium text-void-300 outline-none"
+            >
+              {TTS_VOICES.map((voice) => (
+                <option key={voice.id} value={voice.id}>
+                  {voice.name} ({voice.gender})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Status */}
+          <div className="flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-0.5">
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+            <span className="text-[10px] font-medium text-emerald-400/80">
+              voice ready
+            </span>
+          </div>
         </div>
       </header>
 
@@ -215,6 +249,7 @@ export function PushToTalk() {
               );
             }
 
+            const msgVoice = TTS_VOICES.find((v) => v.id === msg.voice);
             return (
               <div key={msg.id} className="flex justify-start">
                 <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-dungeon-500/10 bg-dungeon-950/30 px-4 py-2.5">
@@ -223,6 +258,11 @@ export function PushToTalk() {
                     <span className="text-[9px] font-semibold uppercase tracking-widest text-dungeon-500/50">
                       dungeonmaster
                     </span>
+                    {msgVoice && (
+                      <span className="text-[9px] text-void-600">
+                        · {msgVoice.name}
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm leading-relaxed text-void-200">
                     {msg.text}

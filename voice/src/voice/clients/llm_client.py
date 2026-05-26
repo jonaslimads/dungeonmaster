@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any
 
@@ -18,9 +19,9 @@ class ChatCompletionDTO:
 
 class LLMClient:
     def __init__(self, *, timeout_seconds: int = 120) -> None:
-        self._base_url = settings.open_ai_url.rstrip("/")
-        self._password = settings.open_ai_password
-        self._model = settings.open_ai_model
+        self._base_url = settings.llm_url.rstrip("/")
+        self._password = settings.llm_password
+        self._model = settings.llm_model
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds))
         logger.info(
             "LLMClient: url=%s model=%s timeout=%ds",
@@ -84,6 +85,31 @@ class LLMClient:
             logger.error("chat_completion JSON_PARSE_ERROR: url=%s model=%s error=%s", url, model, exc)
             raise RuntimeError("Invalid JSON from LLM") from exc
 
+    async def warm_up(self, *, max_attempts: int = 5, base_delay: float = 2.0) -> None:
+        """Send a minimal request to load the model into memory.
+
+        Retries with exponential backoff on transient errors (429, timeouts).
+        """
+        logger.info("LLMClient warm_up: model=%s", self._model)
+        for attempt in range(1, max_attempts + 1):
+            try:
+                await self.chat([{"role": "user", "content": "ok"}])
+                logger.info("LLMClient warm_up OK: model=%s", self._model)
+                return
+            except RuntimeError as exc:
+                remaining = max_attempts - attempt
+                if remaining == 0:
+                    raise
+                delay = base_delay * (2 ** (attempt - 1))
+                logger.warning(
+                    "LLMClient warm_up attempt %d/%d failed (%s), retrying in %.1fs",
+                    attempt,
+                    max_attempts,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
     async def chat(self, messages: list[dict[str, str]]) -> ChatCompletionDTO:
         payload = {
             "model": self._model,
@@ -97,6 +123,13 @@ class LLMClient:
 
         try:
             content = data["choices"][0]["message"]["content"]
+            logger.info(
+                "chat RESPONSE: model=%s content_len=%d usage=%s content=%r",
+                self._model,
+                len(content),
+                data.get("usage"),
+                content[:500],
+            )
         except (KeyError, IndexError) as exc:
             logger.error("chat_completion EXTRACT_ERROR: %s", exc)
             raise RuntimeError("Invalid response structure from LLM") from exc

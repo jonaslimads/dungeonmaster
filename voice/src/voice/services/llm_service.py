@@ -25,5 +25,8 @@ class LLMService:
             {"role": "user", "content": transcript},
         ]
 
+        logger.info("LLMService generate_reply: input_len=%d input=%r", len(transcript), transcript[:500])
+
         dto = await self._client.chat(messages)
+        logger.info("LLMService generate_reply: output_len=%d output=%r", len(dto.content), dto.content[:500])
         return dto.content
