@@ -18,22 +18,46 @@ class LayoutService:
         *,
         source_id: str,
         page_range: range,
-    ) -> None:
-        """Run VLM layout analysis on a range of pages."""
+    ) -> list[dict]:
+        """Run VLM layout analysis on a range of pages.
+
+        Returns a list of skipped-page records with page_number and reason.
+        Failed pages are skipped — the pipeline continues processing the rest.
+        """
         pages_dir = self._storage.get_pages_dir(source_id)
         batch_size = settings.vlm_batch_pages
         layout_records: list[dict] = []
+        skipped_pages: list[dict] = []
 
         for page_num in page_range:
             image_path = pages_dir / f"page_{page_num:04d}.png"
             if not image_path.exists():
-                logger.warning("analyze_pages: image missing for page %d", page_num)
+                logger.warning(
+                    "analyze_pages: image missing for page %d, skipping",
+                    page_num,
+                )
+                skipped_pages.append({
+                    "page_number": page_num,
+                    "reason": "image_missing",
+                })
                 continue
 
-            analysis = await self._vlm.analyze_page_layout(
-                page_image_path=image_path,
-                page_number=page_num,
-            )
+            try:
+                analysis = await self._vlm.analyze_page_layout(
+                    page_image_path=image_path,
+                    page_number=page_num,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "analyze_pages: page=%d failed (%s), skipping",
+                    page_num,
+                    exc,
+                )
+                skipped_pages.append({
+                    "page_number": page_num,
+                    "reason": str(exc),
+                })
+                continue
 
             record = {
                 "page_number": page_num,
@@ -77,12 +101,23 @@ class LayoutService:
             output = self._storage.get_extracted_dir(source_id) / "vlm_layout.jsonl"
             self._storage.save_jsonl(output, layout_records)
 
+        if skipped_pages:
+            logger.warning(
+                "analyze_pages: source=%s skipped %d pages: %s",
+                source_id,
+                len(skipped_pages),
+                ", ".join(f"p{r['page_number']}({r['reason'][:40]})" for r in skipped_pages),
+            )
+
         logger.info(
-            "analyze_pages: source=%s pages=%d-%d",
+            "analyze_pages: source=%s pages=%d-%d analyzed=%d skipped=%d",
             source_id,
             page_range[0],
             page_range[-1],
+            len(layout_records) + sum(1 for _ in []),
+            len(skipped_pages),
         )
+        return skipped_pages
 
     async def close(self) -> None:
         await self._vlm.close()

@@ -1,6 +1,8 @@
+import asyncio
 import base64
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +11,9 @@ import httpx
 from rag.config import settings
 
 logger = logging.getLogger(__name__)
+
+MAX_VLM_RETRIES = 5
+VLM_RETRY_BASE_DELAY = 2.0
 
 
 class VlmLayoutBlockDTO:
@@ -75,23 +80,38 @@ _VLM_SYSTEM_PROMPT = (
     "Analyze the page image and return structured JSON.\n\n"
     "## Markdown Reconstruction (PRIMARY TASK)\n\n"
     "Reconstruct the full page as clean, well-structured Markdown.\n\n"
-    "Rules for Markdown output:\n"
-    "- Use proper heading levels: # for major sections, ## for subsections, ### for sub-subsections.\n"
-    "- Preserve the hierarchy of headings from the page.\n"
+    "### Heading Hierarchy\n"
+    "- **H1 (`#`)**: Chapter titles, major section titles (largest, boldest text on the page).\n"
+    "- **H2 (`##`)**: Section titles within a chapter (large, prominent headings).\n"
+    "- **H3 (`###`)**: Subsection titles, rule category headers (medium-sized headings).\n"
+    "- **H4 (`####`)**: Sub-subsection titles, individual rule/feature names when they act as headers.\n"
+    "- When in doubt about heading level, look at font size, weight, and capitalization.\n"
+    "- A fully capitalized line that is larger than surrounding text is almost always a heading.\n"
+    "- Do NOT flatten everything to the same level — use the visual hierarchy to decide.\n\n"
+    "### Text Formatting\n"
+    "- Use **bold** for emphasized terms, rule names, ability names, and key mechanics terms.\n"
+    "- Use *italics* for flavor text, narrative descriptions, and spoken dialogue.\n"
+    "- Use `inline code` for dice notation (e.g., `1d20 + 5`, `2d6+3`).\n"
+    "- Use ~~strikethrough~~ only if the original text shows crossed-out content.\n"
+    "- Use > blockquotes for sidebar text, callout boxes, or quoted material.\n"
+    "- Use --- for horizontal rules that separate major sections on the page.\n\n"
+    "### Lists and Tables\n"
     "- Convert tables to proper Markdown table format with | separators and header rows.\n"
-    "- Preserve stat blocks as structured text with clear labels.\n"
-    "- Use **bold** for emphasized terms, *italics* for flavor text.\n"
-    "- Use numbered lists for ordered content, bullet lists for unordered.\n"
+    "- Use numbered lists (1. 2. 3.) for ordered steps, prerequisites, or sequences.\n"
+    "- Use bullet lists (- or *) for unordered item collections, trait lists, option lists.\n"
+    "- Use nested lists when the visual indentation shows sub-items.\n\n"
+    "### Structural Rules\n"
     "- Keep paragraphs coherent — do NOT break words across lines.\n"
     "- Do NOT add line breaks in the middle of words or phrases.\n"
     "- Preserve special characters, numbers, and symbols accurately.\n"
-    "- For spell entries: include name, level, school, casting time, range, components, duration, description.\n"
-    "- For monster entries: include name, size/type, armor class, hit points, speed, ability scores, skills, senses, CR, traits, actions.\n"
-    "- For class features: include name, level, description.\n"
-    "- For rules: preserve the exact wording and structure.\n"
     "- Page numbers at the bottom of pages should be omitted from the markdown.\n"
-    "- Chapter titles and section headers become Markdown headings.\n"
     "- DO NOT invent content. Only transcribe what is visible.\n\n"
+    "### Domain-Specific Formatting\n"
+    "- **Spell entries**: name as heading, then level, school, casting time, range, components, duration, description.\n"
+    "- **Monster entries**: name as heading, then size/type, armor class, hit points, speed, ability scores, skills, senses, CR, traits, actions.\n"
+    "- **Class features**: name as heading, then level, description.\n"
+    "- **Stat blocks**: preserve as structured text with clear labeled fields.\n"
+    "- **Rules**: preserve the exact wording and structure.\n\n"
     "## Layout Blocks\n\n"
     "For each text block on the page:\n"
     "- Return the block type: heading, subheading, body_text, caption, table, list, footnote, page_number, stat_block, spell_block, monster_block.\n"
@@ -141,7 +161,7 @@ _VLM_SYSTEM_PROMPT = (
 
 
 class VlmClient:
-    def __init__(self, *, timeout_seconds: int = 300) -> None:
+    def __init__(self, *, timeout_seconds: int = 120) -> None:
         self._base_url = settings.vlm_url.rstrip("/")
         self._password = settings.vlm_password
         self._model = settings.vlm_model
@@ -171,9 +191,20 @@ class VlmClient:
         page_number: int,
     ) -> VlmPageAnalysisDTO:
         """Send a page image to Gemma 4 for layout analysis, OCR, and visual asset detection."""
+        t0 = time.monotonic()
+
         with open(page_image_path, "rb") as f:
             image_bytes = f.read()
+        image_size_kb = len(image_bytes) / 1024
         image_b64 = base64.b64encode(image_bytes).decode("ascii")
+
+        t_encode = time.monotonic() - t0
+        logger.info(
+            "analyze_page_layout: page=%d image=%0.1fKB encode=%0.2fs",
+            page_number,
+            image_size_kb,
+            t_encode,
+        )
 
         payload = {
             "model": self._model,
@@ -197,37 +228,29 @@ class VlmClient:
             "temperature": 0.1,
         }
 
-        logger.info(
-            "analyze_page_layout: POST %s/chat/completions model=%s page=%d",
-            self._base_url,
-            self._model,
-            page_number,
-        )
-
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._password:
             headers["Authorization"] = f"Bearer {self._password}"
 
-        try:
-            response = await self._http.post(
-                f"{self._base_url}/chat/completions",
-                json=payload,
-                headers=headers,
-            )
-        except httpx.TimeoutException as exc:
-            logger.error(
-                "analyze_page_layout TIMEOUT: page=%d error=%s",
-                page_number,
-                exc,
-            )
-            raise RuntimeError(f"VLM request timed out for page {page_number}") from exc
-        except httpx.RequestError as exc:
-            logger.error(
-                "analyze_page_layout REQUEST_ERROR: page=%d error=%s",
-                page_number,
-                exc,
-            )
-            raise RuntimeError(f"VLM request failed for page {page_number}") from exc
+        url = f"{self._base_url}/chat/completions"
+        logger.info(
+            "analyze_page_layout: page=%d sending POST %s",
+            page_number,
+            url,
+        )
+
+        response = await self._request_with_retry(
+            url,
+            payload,
+            headers,
+            page_number,
+        )
+
+        logger.info(
+            "analyze_page_layout: page=%d HTTP response status=%d",
+            page_number,
+            response.status_code,
+        )
 
         if response.status_code >= 400:
             logger.error(
@@ -242,12 +265,15 @@ class VlmClient:
         content = raw.get("choices", [{}])[0].get("message", {}).get("content", "")
 
         parsed = self._parse_vlm_response(content, page_number)
+        t_total = time.monotonic() - t0
         logger.info(
-            "analyze_page_layout OK: page=%d blocks=%d assets=%d markdown_len=%d",
+            "analyze_page_layout OK: page=%d blocks=%d assets=%d markdown_len=%d total=%0.2fs (encode=%0.2fs)",
             page_number,
             len(parsed.layout_blocks),
             len(parsed.visual_assets),
             len(parsed.markdown),
+            t_total,
+            t_encode,
         )
         return parsed
 
@@ -305,6 +331,77 @@ class VlmClient:
             layout_blocks=layout_blocks,
             visual_assets=visual_assets,
         )
+
+    async def _request_with_retry(
+        self,
+        url: str,
+        payload: dict,
+        headers: dict[str, str],
+        page_number: int,
+    ) -> httpx.Response:
+        """Send HTTP request with exponential backoff for 429 rate limits."""
+        last_error: Exception | None = None
+
+        for attempt in range(MAX_VLM_RETRIES + 1):
+            t0 = time.monotonic()
+            try:
+                response = await self._http.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                )
+            except httpx.TimeoutException as exc:
+                elapsed = time.monotonic() - t0
+                logger.error(
+                    "analyze_page_layout TIMEOUT: page=%d attempt=%d elapsed=%0.2fs error=%s",
+                    page_number,
+                    attempt,
+                    elapsed,
+                    exc,
+                )
+                raise RuntimeError(
+                    f"VLM request timed out for page {page_number}"
+                ) from exc
+            except httpx.RequestError as exc:
+                elapsed = time.monotonic() - t0
+                logger.error(
+                    "analyze_page_layout REQUEST_ERROR: page=%d attempt=%d elapsed=%0.2fs error=%s",
+                    page_number,
+                    attempt,
+                    elapsed,
+                    exc,
+                )
+                raise RuntimeError(
+                    f"VLM request failed for page {page_number}"
+                ) from exc
+
+            if response.status_code != 429:
+                return response
+
+            last_error = RuntimeError(
+                f"VLM returned {response.status_code}: {response.text[:500]}"
+            )
+
+            retry_after = float(
+                response.headers.get("Retry-After", VLM_RETRY_BASE_DELAY * 2 ** attempt)
+            )
+            logger.warning(
+                "analyze_page_layout RATE_LIMIT: page=%d attempt=%d/%d "
+                "retry_after=%0.1fs status=%d",
+                page_number,
+                attempt + 1,
+                MAX_VLM_RETRIES,
+                retry_after,
+                response.status_code,
+            )
+            await asyncio.sleep(retry_after)
+
+        logger.error(
+            "analyze_page_layout EXHAUSTED_RETRIES: page=%d after %d attempts",
+            page_number,
+            MAX_VLM_RETRIES + 1,
+        )
+        raise last_error  # type: ignore[misc]
 
     @staticmethod
     def _extract_json(text: str) -> str:

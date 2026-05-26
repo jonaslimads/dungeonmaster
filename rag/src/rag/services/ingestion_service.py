@@ -76,6 +76,8 @@ class IngestionService:
 
         all_native_blocks: list = []
         all_assets: list[dict] = []
+        all_vlm_skipped: list[dict] = []
+        seen_asset_ids: set[str] = set()
 
         for batch_start in range(start_page, page_count + 1, self._batch_size):
             batch_end = min(batch_start + self._batch_size - 1, page_count)
@@ -94,8 +96,8 @@ class IngestionService:
                 page_range=range(batch_start, batch_end + 1),
             )
 
-            # Extract native text for batch
-            blocks = self._native_text.extract_and_save(
+            # Extract native text for batch (in-memory, saved later)
+            blocks = self._native_text.extract(
                 source_id=source_id,
                 pdf_path=pdf_path,
                 page_range=range(batch_start, batch_end + 1),
@@ -104,30 +106,25 @@ class IngestionService:
 
             # VLM layout + asset detection (optional)
             if use_vlm:
-                await self._layout.analyze_pages(
+                skipped = await self._layout.analyze_pages(
                     source_id=source_id,
                     page_range=range(batch_start, batch_end + 1),
                 )
+                all_vlm_skipped.extend(skipped)
+
                 layout_records = self._storage.load_jsonl(
                     self._storage.get_extracted_dir(source_id) / "vlm_layout.jsonl"
                 )
-                batch_assets = self._collect_visual_assets(layout_records)
-                all_assets.extend(batch_assets)
-
-                cropped = self._process_assets(
-                    source_id=source_id,
-                    assets=batch_assets,
+                batch_assets = self._collect_visual_assets(
+                    layout_records,
+                    page_range=range(batch_start, batch_end + 1),
                 )
-                all_assets = [
-                    a for a in all_assets if a not in batch_assets
-                ] + [c.model_dump() for c in cropped]
-
-            # Build canonical markdown for batch (append)
-            self._markdown.build_from_native_text(
-                source_id=source_id,
-                native_blocks=blocks,
-                append=True,
-            )
+                new_assets = [
+                    a for a in batch_assets
+                    if a.get("id", str(a)) not in seen_asset_ids
+                ]
+                seen_asset_ids.update(a.get("id", str(a)) for a in new_assets)
+                all_assets.extend(new_assets)
 
             logger.info(
                 "run_pipeline: source=%s progress %d/%d pages",
@@ -136,34 +133,88 @@ class IngestionService:
                 page_count,
             )
 
-        # Load previously extracted blocks if resuming
-        if not force:
-            prev_blocks = self._storage.load_jsonl(
-                self._storage.get_extracted_dir(source_id) / "native_text.jsonl"
+        # Save native_text.jsonl (all blocks, single write)
+        native_records = [
+            {
+                "page_number": blk.page_number,
+                "block_index": blk.block_index,
+                "block_type": blk.block_type,
+                "text": blk.text,
+                "bbox": blk.bbox,
+            }
+            for blk in all_native_blocks
+        ]
+        native_path = (
+            self._storage.get_extracted_dir(source_id) / "native_text.jsonl"
+        )
+        if native_path.exists():
+            native_path.unlink()
+        self._storage.save_jsonl(native_path, native_records)
+        logger.info(
+            "run_pipeline: source=%s saved %d native text blocks",
+            source_id,
+            len(native_records),
+        )
+
+        # Process all visual assets at once (crop + save)
+        cropped_assets: list[dict] = []
+        if use_vlm and all_assets:
+            cropped_models = self._process_assets(
+                source_id=source_id,
+                assets=all_assets,
             )
-            all_native_blocks = prev_blocks + all_native_blocks
+            cropped_assets = [m.model_dump() for m in cropped_models]
+            self._visual_asset.save_assets(source_id=source_id, assets=cropped_models)
+            logger.info(
+                "run_pipeline: source=%s saved %d visual assets",
+                source_id,
+                len(cropped_assets),
+            )
+
+        # Build canonical markdown from all native blocks (single write)
+        self._markdown.build_from_native_text(
+            source_id=source_id,
+            native_blocks=all_native_blocks,
+            append=False,
+        )
+
+        # Save skipped VLM pages to extracted/
+        if use_vlm and all_vlm_skipped:
+            skipped_path = (
+                self._storage.get_extracted_dir(source_id) / "vlm_skipped.jsonl"
+            )
+            if skipped_path.exists():
+                skipped_path.unlink()
+            self._storage.save_jsonl(skipped_path, all_vlm_skipped)
+            logger.info(
+                "run_pipeline: source=%s saved %d skipped VLM pages to %s",
+                source_id,
+                len(all_vlm_skipped),
+                skipped_path,
+            )
+
+        # Rebuild book.md from pages.jsonl
+        self._markdown.rebuild_book_md(source_id)
 
         # Final quality report
-        cropped_assets = all_assets if use_vlm else []
         report = self._generate_quality_report(
             source_id=source_id,
             page_count=page_count,
             native_blocks=all_native_blocks,
             assets=cropped_assets,
+            vlm_skipped=all_vlm_skipped if use_vlm else [],
         )
         self._storage.save_text(
             self._storage.get_reports_dir(source_id) / "quality_report.md",
             report,
         )
 
-        # Rebuild book.md from pages.jsonl
-        self._markdown.rebuild_book_md(source_id)
-
         return {
             "source_id": source_id,
             "page_count": str(page_count),
             "native_blocks": str(len(all_native_blocks)),
             "visual_assets": str(len(cropped_assets)),
+            "vlm_skipped_pages": str(len(all_vlm_skipped)),
             "status": "completed",
         }
 
@@ -258,6 +309,7 @@ class IngestionService:
             self._storage.get_extracted_dir(source_id) / "vlm_layout.jsonl",
             self._storage.get_extracted_dir(source_id) / "ocr_blocks.jsonl",
             self._storage.get_extracted_dir(source_id) / "image_assets.jsonl",
+            self._storage.get_extracted_dir(source_id) / "vlm_skipped.jsonl",
             self._storage.get_canonical_dir(source_id) / "pages.jsonl",
             self._storage.get_canonical_dir(source_id) / "book.md",
             self._storage.get_reports_dir(source_id) / "quality_report.md",
@@ -272,7 +324,7 @@ class IngestionService:
         source_id: str,
         assets: list[dict],
     ) -> list:
-        """Process visual assets: validate, crop, save."""
+        """Process visual assets: validate and crop."""
         from PIL import Image
 
         pages_dir = self._storage.get_pages_dir(source_id)
@@ -306,19 +358,30 @@ class IngestionService:
             source_id=source_id,
             assets=all_image_assets,
         )
-        self._visual_asset.save_assets(source_id=source_id, assets=cropped)
         return cropped
 
     async def close(self) -> None:
         await self._layout.close()
 
-    def _collect_visual_assets(self, layout_records: list[dict]) -> list[dict]:
-        """Collect all visual asset detections from VLM layout records."""
+    def _collect_visual_assets(
+        self,
+        layout_records: list[dict],
+        page_range: range | None = None,
+    ) -> list[dict]:
+        """Collect visual asset detections from VLM layout records.
+
+        If page_range is given, only collect assets from those pages.
+        """
         assets: list[dict] = []
+        allowed_pages = set(page_range) if page_range else None
+
         for record in layout_records:
+            pn = record.get("page_number", 1)
+            if allowed_pages is not None and pn not in allowed_pages:
+                continue
             for va in record.get("visual_assets", []):
                 assets.append({
-                    "page_number": record.get("page_number", 1),
+                    "page_number": pn,
                     **va,
                 })
         return assets
@@ -330,6 +393,7 @@ class IngestionService:
         page_count: int,
         native_blocks: list,
         assets: list[dict],
+        vlm_skipped: list[dict] | None = None,
     ) -> str:
         """Generate a quality report markdown document."""
         text_length_per_page: dict[int, int] = {}
@@ -384,6 +448,15 @@ class IngestionService:
             f"- Low confidence (< 0.5): {low_confidence}",
             "",
         ])
+
+        if vlm_skipped:
+            lines.append("## VLM Skipped Pages")
+            lines.append(f"- Pages skipped during VLM analysis: {len(vlm_skipped)}")
+            for entry in sorted(vlm_skipped, key=lambda e: e.get("page_number", 0)):
+                pn = entry.get("page_number", "?")
+                reason = entry.get("reason", "unknown")
+                lines.append(f"- Page {pn}: {reason}")
+            lines.append("")
 
         if no_text_pages:
             lines.append("## Pages with no extracted text")

@@ -75,9 +75,11 @@ class VisualAssetService:
         return assets
 
     def save_assets(self, source_id: str, assets: list[ImageAsset]) -> None:
-        """Save image asset metadata to image_assets.jsonl."""
+        """Save image asset metadata to image_assets.jsonl (overwrite)."""
         records = [asset.model_dump() for asset in assets]
         output = self._storage.get_extracted_dir(source_id) / "image_assets.jsonl"
+        if output.exists():
+            output.unlink()
         self._storage.save_jsonl(output, records)
 
     @staticmethod
