@@ -5,6 +5,8 @@ class Section(BaseModel):
     id: str
     source_id: str
     heading: str
-    start_page: int
-    end_page: int | None = None
-    level: int = 1
+    level: int
+    page_number: int | None = None
+    text: str
+    token_count: int
+    section_path: list[str]

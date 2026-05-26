@@ -185,7 +185,8 @@ rag/
 │   │   ├── markdown_service.py    # Build pages.jsonl + book.md
 │   │   ├── ingestion_service.py   # Orchestrate full pipeline (batched)
 │   │   ├── extraction_service.py  # Job management (create, run, status)
-│   │   └── chunking_service.py    # Placeholder for Phase 2
+│   │   ├── chunking_service.py    # Section parsing, parent/child chunks, classification
+│   │   └── retrieval_service.py   # TF-IDF text search across child chunks
 │   ├── clients/
 │   │   ├── pdf_client.py          # PyMuPDF wrapper (render, extract)
 │   │   ├── ocr_client.py          # VLM OCR client (Gemma 4)
@@ -198,7 +199,13 @@ rag/
 │       ├── sources_router.py      # POST /sources/register-local, GET /sources
 │       ├── extraction_requests.py # CreateExtractionJobRequest
 │       ├── extraction_responses.py # ExtractionJobResponse
-│       └── extraction_router.py   # POST /extraction/jobs, GET/POST /jobs/{id}
+│       ├── extraction_router.py   # POST /extraction/jobs, GET/POST /jobs/{id}
+│       ├── chunking_requests.py   # ChunkSourceRequest
+│       ├── chunking_responses.py  # ChunkSourceResponse
+│       ├── chunking_router.py     # POST /chunking/sources/{source_id}
+│       ├── retrieval_requests.py  # SearchRequest
+│       ├── retrieval_responses.py # SearchResponse, SearchResult
+│       └── retrieval_router.py    # POST /retrieval/search
 ```
 
 **Endpoints:**
@@ -211,6 +218,8 @@ rag/
 | `POST` | `/extraction/jobs` | Create extraction job |
 | `GET` | `/extraction/jobs/{job_id}` | Get job status |
 | `POST` | `/extraction/jobs/{job_id}/run` | Run extraction job |
+| `POST` | `/chunking/sources/{source_id}` | Chunk a source (sections + parent + child) |
+| `POST` | `/retrieval/search` | TF-IDF text search across child chunks |
 
 **Extraction pipeline:**
 ```
@@ -353,12 +362,15 @@ cd rag && uv run uvicorn rag.main:app --reload
 - [x] Visual asset detection and cropping
 - [x] Image asset metadata
 
-### Phase 2: Chunking
-- [ ] Split `book.md` into sections
-- [ ] Generate parent chunks (sections)
-- [ ] Generate child chunks (paragraphs, stat blocks)
+### Phase 2: Chunking ✅
+- [x] Split `book.md` into sections
+- [x] Generate parent chunks (one per section)
+- [x] Generate child chunks (split on paragraphs/sub-headings)
+- [x] Heuristic chunk type classification (rule, spell, monster, item, table...)
+- [x] Save `sections.jsonl`, `parent_chunks.jsonl`, `child_chunks.jsonl`
+- [x] Chunking report (`chunks_report.md`)
 - [ ] Link chunks to visual assets
-- [ ] Save `sections.jsonl`, `parent_chunks.jsonl`, `child_chunks.jsonl`
+- [x] TF-IDF text search endpoint (`POST /retrieval/search`)
 
 ### Phase 3: Indexing
 - [ ] Generate embeddings for chunks
